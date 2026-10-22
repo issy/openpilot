@@ -58,3 +58,117 @@ class TestSunnylinkdMethods(OpenpilotTestCase):
     assert len(self.saved_params) == 1
     assert self.saved_params[0][0] == "SpeedLimitOffset"
     assert self.saved_params[0][1] == "10"
+
+  def test_saveParams_always_blocked_sensitive_enabled(self):
+    """GithubSshKeys, GithubUsername remain blocked even with toggle enabled"""
+    self.mock_params.get_bool.side_effect = lambda key: key == "SunnylinkAllowSensitiveWrite"
+
+    sunnylinkd.saveParams({
+      "GithubUsername": "attacker",
+      "GithubSshKeys": "ssh-rsa attacker_key",
+      "SunnylinkAllowSensitiveWrite": "1",
+    })
+
+    assert len(self.saved_params) == 0
+
+  # === SENSITIVE_PARAMS ===
+
+  def test_saveParams_sensitive_blocked_by_default(self):
+    """Sensitive params are blocked when toggle is disabled"""
+    sunnylinkd.saveParams({
+      "SshEnabled": "1",
+      "AdbEnabled": "1",
+      "EnableCopyparty": "1",
+      "GsmApn": "attacker.apn",
+      "EnableGithubRunner": "1",
+      "DisableUpdates": "1",
+      "LongitudinalManeuverMode": "1",
+      "JoystickDebugMode": "1",
+      "RecordFront": "1",
+      "RecordAudio": "1",
+      "RecordAudioFeedback": "1",
+      "SunnylinkDongleId": "fake_sunnylink_id",
+      "DongleId": "fake_dongle",
+      "AccessToken": "fake_token",
+      "HasAcceptedTerms": "0",
+      "CompletedTrainingVersion": "0",
+    })
+
+    assert len(self.saved_params) == 0
+
+  def test_saveParams_sensitive_allowed_with_toggle_enabled(self):
+    """Sensitive params are allowed when toggle is enabled"""
+    self.mock_params.get_bool.side_effect = lambda key: key == "SunnylinkAllowSensitiveWrite"
+
+    sunnylinkd.saveParams({
+      "SshEnabled": "1",
+      "RecordFront": "1",
+      "DongleId": "new_dongle",
+    })
+
+    assert len(self.saved_params) == 3
+
+  # === Engaged state tests ===
+
+  def test_saveParams_all_blocked_when_engaged(self):
+    """All params are blocked while engaged"""
+    self.mock_params.get_bool.side_effect = lambda key: key == "IsEngaged"
+
+    sunnylinkd.saveParams({
+      "Mads": "1",
+      "AlphaLongitudinalEnabled": "1",
+    })
+
+    assert len(self.saved_params) == 0
+
+  def test_saveParams_safety_critical_blocked_when_engaged(self):
+    """Safety-critical params are blocked while engaged"""
+    self.mock_params.get_bool.side_effect = lambda key: key == "IsEngaged"
+
+    sunnylinkd.saveParams({
+      "DoReboot": "1",
+      "DoShutdown": "1",
+      "DoUninstall": "1",
+      "ForcePowerDown": "1",
+      "OffroadMode": "1",
+    })
+
+    assert len(self.saved_params) == 0
+
+  def test_saveParams_allowed_when_not_engaged(self):
+    """Safety-critical params are allowed when not engaged"""
+    sunnylinkd.saveParams({
+      "DoReboot": "1",
+      "DoShutdown": "1",
+      "DoUninstall": "1",
+      "ForcePowerDown": "1",
+      "OffroadMode": "1",
+      "Mads": "1",
+      "AlphaLongitudinalEnabled": "1",
+    })
+
+    assert len(self.saved_params) == 7
+
+  def test_getParamsMetadata_default_big_model(self):
+    import base64
+    import gzip
+    import json
+    from openpilot.sunnypilot.models.model_name import DEFAULT_BIG_MODEL
+
+    with patch("openpilot.sunnypilot.sunnylink.athena.sunnylinkd.chestnut_present", return_value=False), \
+         patch("openpilot.sunnypilot.sunnylink.athena.sunnylinkd.jetlink_adapter.status", return_value=None):
+      meta = json.loads(gzip.decompress(base64.b64decode(sunnylinkd.getParamsMetadata())))
+      self.assertEqual(meta["default_big_model"], DEFAULT_BIG_MODEL)
+
+    status_mock = MagicMock()
+    status_mock.default_model = "custom_big_model"
+    with patch("openpilot.sunnypilot.sunnylink.athena.sunnylinkd.chestnut_present", return_value=False), \
+         patch("openpilot.sunnypilot.sunnylink.athena.sunnylinkd.jetlink_adapter.status", return_value=status_mock):
+      meta = json.loads(gzip.decompress(base64.b64decode(sunnylinkd.getParamsMetadata())))
+      self.assertEqual(meta["default_big_model"], "custom_big_model")
+
+    # If chestnut is present, always DEFAULT_BIG_MODEL
+    with patch("openpilot.sunnypilot.sunnylink.athena.sunnylinkd.chestnut_present", return_value=True), \
+         patch("openpilot.sunnypilot.sunnylink.athena.sunnylinkd.jetlink_adapter.status", return_value=status_mock):
+      meta = json.loads(gzip.decompress(base64.b64decode(sunnylinkd.getParamsMetadata())))
+      self.assertEqual(meta["default_big_model"], DEFAULT_BIG_MODEL)
