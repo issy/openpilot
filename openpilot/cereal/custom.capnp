@@ -362,6 +362,8 @@ struct OnroadEventSP @0xda96579883444c35 {
     bigModelReady @25;
     bigModelAvailable @26;
     bigModelLinkLost @27;
+    blendfulEnabled @28;
+    blendfulDisabled @29;
   }
 }
 
