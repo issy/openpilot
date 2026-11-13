@@ -104,7 +104,7 @@ class TestParams(OpenpilotTestCase):
     self.assertNotEqual(settings.marks()[KEYS.big_model], before)
 
   def test_every_key_is_declared_with_its_type(self):
-    types = {'link': ParamKeyType.INT, 'offroad': ParamKeyType.BOOL, 'charge_phone': ParamKeyType.BOOL}
+    types = {'link': ParamKeyType.INT, 'offroad': ParamKeyType.BOOL, 'charge_phone': ParamKeyType.BOOL, 'select': ParamKeyType.STRING}
     params = Params()
     for field, key in KEYS._asdict().items():
       self.assertEqual(params.get_type(key), types.get(field, ParamKeyType.JSON), key)
@@ -149,19 +149,34 @@ class TestTheDevice(OpenpilotTestCase):
       with mock.patch.object(HARDWARE, 'get_device_type', return_value=device):
         self.assertEqual(Adapter().camera(), (camera.width, camera.height, *MEDMODEL_INPUT_SIZE))
 
-  def test_the_warp_is_modelds_own_in_every_checkout(self):
-    # modeld_tinygrad's, which the checkout carries (LFS) for every camera, so
-    # a device without a build has it too
+  def test_the_warp_is_stock_modelds(self):
+    # jetlink's stock default: a plain TinyJit pickle scons builds for every camera, on every
+    # build (modeld_v2's copy is sunnypilot's own SPTGPLN1 container, which jetlink cannot read)
     from openpilot.common.transformations.camera import _ar_ox_fisheye, _os_fisheye
     from openpilot.common.transformations.model import MEDMODEL_INPUT_SIZE
     for camera in (_ar_ox_fisheye, _os_fisheye):
       path = Adapter().warp_path(camera.width, camera.height, *MEDMODEL_INPUT_SIZE)
-      self.assertEqual(path, Path(BASEDIR) / 'openpilot/sunnypilot/modeld_v2/models' /
+      self.assertEqual(path, Path(BASEDIR) / 'openpilot/selfdrive/modeld/models' /
                        f'driving_warp_{camera.width}x{camera.height}_tinygrad.pkl')
-      self.assertTrue(path.is_file(), path)
+    sconscript = (Path(BASEDIR) / 'openpilot/selfdrive/modeld/SConscript').read_text()
+    self.assertIn('File(f"models/driving_warp_{cam_w}x{cam_h}_tinygrad.pkl")', sconscript)
 
 
 class TestModeld(OpenpilotTestCase):
+  def test_the_cable_counts_only_with_the_link_off(self):
+    # jetlink docs/porting.md: a Jetson on the port reads as a chestnut to cable_connected()
+    from openpilot.common.hardware import usb
+    for cable, link, counted in ((False, False, False), (True, False, True), (True, True, False)):
+      with mock.patch.object(usb, 'cable_connected', return_value=cable), \
+           mock.patch.object(jetlink_adapter, 'link_on', return_value=link):
+        self.assertEqual(jetlink_adapter.chestnut_cable(), counted)
+
+  def test_every_modeld_asks_the_adapter_about_the_cable(self):
+    for path in ('openpilot/selfdrive/modeld/modeld.py', 'openpilot/sunnypilot/modeld_v2/modeld.py'):
+      source = (Path(BASEDIR) / path).read_text()
+      self.assertIn('jetlink_adapter.chestnut_cable()', source, path)
+      self.assertNotIn('cable_connected', source, path)
+
   def test_the_model_face_is_modelds(self):
     from openpilot.selfdrive.modeld import modeld
     from openpilot.selfdrive.modeld.constants import ModelConstants
@@ -174,7 +189,26 @@ class TestModeld(OpenpilotTestCase):
     self.assertEqual(face.desire_len, ModelConstants.DESIRE_LEN)
     self.assertIs(face.constants, V2ModelConstants)
     self.assertEqual((face.lat_smooth_seconds, face.long_smooth_seconds), (modeld.LAT_SMOOTH_SECONDS, modeld.LONG_SMOOTH_SECONDS))
-    self.assertIs(face.get_action_from_model, modeld.get_action_from_model)
+    self.assertIsNotNone(face.get_action_from_model)
+
+  def test_the_action_function_is_modelds_plus_blendful(self):
+    import numpy as np
+    from openpilot.cereal import log
+    from openpilot.selfdrive.modeld import modeld
+    # adding Blendful after stock's action function equals adding it before only
+    # while stock leaves the curvature unsmoothed
+    self.assertEqual(modeld.LAT_SMOOTH_SECONDS, 0.0)
+    action = Adapter().model_face().get_action_from_model
+    prev = log.ModelDataV2.Action(desiredCurvature=0.002, desiredAcceleration=0.1)
+    for v_ego in (0.1, 20.0):
+      output = {'action': np.array([[0.001 * max(1.0, v_ego) ** 2, 0.5]], dtype=np.float32)}
+      stock = modeld.get_action_from_model(output, prev, 0.3, 0.3, v_ego)
+      self.assertEqual(action(output, prev, 0.3, 0.3, v_ego).to_dict(), stock.to_dict(), 'stock modeld passes no callback')
+      blendful = mock.Mock(return_value=0.0005)
+      blended = action(output, prev, 0.3, 0.3, v_ego, blendful)
+      blendful.assert_called_once_with(stock.desiredCurvature)
+      self.assertAlmostEqual(blended.desiredCurvature, stock.desiredCurvature + (0.0005 if v_ego > modeld.MIN_LAT_CONTROL_SPEED else 0.0), places=6)
+      self.assertEqual(blended.desiredAcceleration, stock.desiredAcceleration)
 
   def test_in_control_shuts_the_swap_window_on_anything_in_control_or_unknown(self):
     op = Adapter()
@@ -344,7 +378,7 @@ class TestWithoutAUsableJetlink(OpenpilotTestCase):
     for link in (0, 1):
       Params().put(KEYS.link, link, block=True)
       self.assertEqual(check_fallback(jetlink_adapter._Off('why'), jetlink_adapter.HOOK_NAMES,
-                                      link_on=jetlink_adapter._link_on), [])
+                                      link_on=jetlink_adapter.link_on), [])
 
   def test_without_a_checkout_every_hook_is_the_link_off(self):
     # an empty jetlink_repo: manager, the UI, hardwared and modeld must not care
