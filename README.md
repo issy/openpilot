@@ -1,5 +1,7 @@
 ## ✍ To install this fork use installer.comma.ai/issy/master (Comma Four compatible)
 
+This is a fork of [sunnypilot](https://github.com/sunnypilot/sunnypilot) that includes the VW MEB platform tweaks from [infiniteCable2](https://github.com/infiniteCable2/openpilot), and the Jetlink capabilities from [zoompilot](https://github.com/zoompilot/zoompilot)
+
 ![](https://user-images.githubusercontent.com/47793918/233812617-beab2e71-57b9-479e-8bff-c3931347ca40.png)
 
 ## 🌞 What is sunnypilot?
